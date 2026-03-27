@@ -6,8 +6,20 @@ class FeatureValidator:
         self.method = method
         self.correlation_threshold = correlation_threshold
 
+        # ✅ Keep only these features
+        self.required_columns = [
+            'memory_growth_rate',
+            'restart_flag',
+            'memory_pressure',
+            'cpu_container_vs_node_ratio',
+            'failure_streak'
+        ]
+
     def validate(self, df: pd.DataFrame) -> bool:
         print("Starting Feature Validation...")
+
+        # ✅ Filter only required columns
+        df = df[self.required_columns]
 
         # 0. Empty check
         if df.empty:
@@ -33,7 +45,7 @@ class FeatureValidator:
             if ((df < 0) | (df > 1)).any().any():
                 print("WARNING: Values outside [0,1] range detected")
 
-        # 4. Correlation check (optional for large data)
+        # 4. Correlation check
         if df.shape[1] < 300:
             corr_matrix = df.corr().abs()
             upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))

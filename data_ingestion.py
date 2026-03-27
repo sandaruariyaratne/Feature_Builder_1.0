@@ -17,24 +17,12 @@ class DataIngestor:
         
         # Your predefined 20 metrics
         self.metrics = [
-            "node_cpu_seconds_total",
-            "node_load1",
-            "node_context_switches_total",
-            "node_memory_MemAvailable_bytes",
-            "node_filesystem_size_bytes",
-            "node_memory_MemUsed_bytes",
-            "node_memory_SwapUsed_bytes",
-            "node_disk_io_time_seconds_total",
-            "node_disk_read_bytes_total",
-            "node_disk_written_bytes_total",
-            "node_network_transmit_bytes_total",
-            "node_network_receive_bytes_total",
-            "node_network_receive_errs_total",
+            "probe_success",
             "container_cpu_usage_seconds_total",
             "container_memory_usage_bytes",
-            "container_memory_working_set_bytes",
-            "container_network_receive_bytes_total",
-            "probe_duration_seconds", "probe_success"
+            "container_start_time_seconds",
+            "node_cpu_seconds_total",
+            "node_memory_MemAvailable_bytes",
             # ... add all 20 metrics here
         ]
 
@@ -67,18 +55,19 @@ class DataIngestor:
             dfs = []
 
             for series in results:
-                labels = series["metric"]
-                label_str = "_".join([f"{k}_{v}" for k,v in labels.items() if k != "__name__"])
-                
-                metric_name = f"{metric}_{label_str}" if label_str else metric
-                
-                df = pd.DataFrame(series["values"], columns=["timestamp", metric_name])
+                df = pd.DataFrame(series["values"], columns=["timestamp", "value"])
                 df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
-                df[metric_name] = df[metric_name].astype(float)
+                df["value"] = df["value"].astype(float)
                 
                 dfs.append(df.set_index("timestamp"))
-
-            return pd.concat(dfs, axis=1)
+            
+            # Combine all label variations into ONE column
+            combined_df = pd.concat(dfs, axis=1)
+            
+            # Aggregate across all series (choose mean or sum)
+            combined_df[metric] = combined_df.mean(axis=1)   # or .sum(axis=1)
+            
+            return combined_df[[metric]]
             
             # Convert to appropriate types
            # df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')

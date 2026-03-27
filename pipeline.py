@@ -17,14 +17,14 @@ class FeatureBuilderPipeline:
         self.preprocessor = DataPreprocessor()
 
         self.window_engine = WindowingEngine(
-            window_size="30min",
+            window_size="10min",
             stride="5min",
             type="sliding"
         )
 
         self.agg_engine = AggregationEngine()
 
-        self.transformer = TransformationLayer(method='standard')
+        self.transformer = TransformationLayer(method=None)
 
         self.validator = FeatureValidator()
 
