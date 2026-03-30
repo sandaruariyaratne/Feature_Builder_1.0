@@ -1,50 +1,62 @@
 import pandas as pd
 
 class AggregationEngine:
+
     def __init__(self):
         pass
 
     def aggregate(self, windows) -> pd.DataFrame:
 
-        print("Calculating custom features...")
+        print("Calculating features + attaching raw metrics...")
 
         feature_rows = []
+
+        RAW_METRICS = [
+            "latency_p95",
+            "latency_std",
+            "error_rate",
+            "cpu_usage_rate",
+            "memory_usage",
+            "net_throughput",
+            "disk_io_rate"
+        ]
 
         for window in windows:
 
             if window.empty or len(window) < 2:
                 continue
 
-            # Sort by time (important)
             window = window.sort_index()
 
             feature = {}
 
-            # 9. memory_growth_rate
-            mem = window['container_memory_usage_bytes']
+            # =========================
+            # 1. ENGINEERED FEATURES
+            # =========================
+
+            # memory growth rate
+            mem = window['memory_usage']
             time_diff = (window.index[-1] - window.index[-2]).total_seconds()
 
-            if time_diff > 0:
-                feature['memory_growth_rate'] = (mem.iloc[-1] - mem.iloc[-2]) / time_diff
-            else:
-                feature['memory_growth_rate'] = 0
+            feature['memory_growth_rate'] = (
+                (mem.iloc[-1] - mem.iloc[-2]) / time_diff
+                if time_diff > 0 else 0
+            )
 
-            # 10. restart_flag
-            start_time = window['container_start_time_seconds']
-            feature['restart_flag'] = int(start_time.iloc[-1] < start_time.iloc[-2])
+            # restart flag
+            feature['restart_flag'] = int(
+                window['container_start_time_seconds'].nunique() > 1
+            )
 
-            # 11. memory_pressure
-            mem_usage = window['container_memory_usage_bytes'].iloc[-1]
+            # memory pressure
+            mem_usage = window['memory_usage'].iloc[-1]
             node_mem = window['node_memory_MemAvailable_bytes'].iloc[-1]
 
-            if node_mem > 0:
-                feature['memory_pressure'] = mem_usage / node_mem
-            else:
-                feature['memory_pressure'] = 0
+            feature['memory_pressure'] = mem_usage / (node_mem + 1e-9)
 
-            # 12. cpu_container_vs_node_ratio
-            cpu_container = window['container_cpu_usage_seconds_total']
-            cpu_node = window['node_cpu_seconds_total']
+            # cpu ratio
+            cpu_container = window['cpu_usage_rate']
+            cpu_node = window['node_cpu_total']
 
             time_diff_full = (window.index[-1] - window.index[0]).total_seconds()
 
@@ -58,19 +70,29 @@ class AggregationEngine:
             else:
                 feature['cpu_container_vs_node_ratio'] = 0
 
-            # 13. failure_streak
-            probe = window['probe_success']
-            
+            # failure streak
+            probe = window['error_rate']
             streak = 0
-            for val in reversed(probe.tolist()):   # <- convert to list
-                if val == 0:
+
+            for val in reversed(probe.tolist()):
+                if val > 0.1:
                     streak += 1
                 else:
                     break
-            
+
             feature['failure_streak'] = streak
 
-            # Timestamp (window end)
+            # =========================
+            # 2. RAW METRICS (NO CALC)
+            # =========================
+
+            for col in RAW_METRICS:
+                if col in window.columns:
+                    feature[col] = window[col].iloc[-1]   # last observed value
+                else:
+                    feature[col] = None
+
+            # timestamp
             feature['timestamp'] = window.index.max()
 
             feature_rows.append(feature)
@@ -79,17 +101,9 @@ class AggregationEngine:
             print("⚠️ No valid windows")
             return pd.DataFrame()
 
-        features_df = pd.DataFrame(feature_rows)
-        features_df.set_index('timestamp', inplace=True)
+        df = pd.DataFrame(feature_rows)
+        df.set_index('timestamp', inplace=True)
 
-        print(f"Feature extraction complete. Shape: {features_df.shape}")
+        print(f"Feature extraction complete. Shape: {df.shape}")
 
-        # ✅ PRINT FEATURES
-        #print("\n🔍 Feature Data (first 5 rows):")
-        #print(features_df.head())
-
-        # Optional: print full data (be careful if large)
-        # print("\nFull Feature Data:")
-        # print(features_df)
-
-        return features_df
+        return df

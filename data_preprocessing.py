@@ -19,32 +19,6 @@ class DataPreprocessor:
         # 2️⃣ Sort by time
         df = df.sort_index()
 
-        '''
-        # 3️⃣ Identify counter metrics
-        counter_prefixes = [
-            "node_cpu_seconds_total",
-            "container_cpu_usage_seconds_total",
-            "container_network_receive_bytes_total",
-        ]
-
-        counter_cols = [
-            col for col in df.columns
-            if any(col.startswith(prefix) for prefix in counter_prefixes)
-        ]
-
-        if counter_cols:
-
-            # Calculate value differences
-            value_diff = df[counter_cols].diff()
-
-            # Calculate time difference (seconds)
-            time_diff = df.index.to_series().diff().dt.total_seconds()
-
-            # Convert counters to rate (per second)
-            df[counter_cols] = value_diff.div(time_diff, axis=0)
-
-            # Handle counter resets (negative values)
-            df[counter_cols] = df[counter_cols].clip(lower=0) '''
 
         # 4️⃣ Resample to fixed 1-minute grid
         df = df.resample("1min").mean()
@@ -59,6 +33,6 @@ class DataPreprocessor:
             #df = df.loc[:, (df != df.iloc[0]).any()]
 
         print(f"Preprocessing complete. Cleaned Shape: {df.shape}")
-        print("\nPreprocessed Metrics:\n", df.head(10))
+        print("\nPreprocessed Metrics:\n", df.head())
 
         return df

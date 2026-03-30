@@ -1,131 +1,89 @@
 import pandas as pd
 import requests
-from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor
-from typing import List, Dict, Union
+from typing import Dict, List
+
 
 class DataIngestor:
-    def __init__(self, source: str, base_url: str):
-        """
-        :param source: 'prometheus' or 'thanos'
-        :param base_url: The API endpoint (e.g., http://prometheus:9090)
-        """
-        self.source = source.lower()
-        self.base_url = base_url.rstrip('/')
-        self.query_api = f"{self.base_url}/api/v1/query_range"
+    def __init__(self, api_url: str):
+        self.api_url = api_url
         self.session = requests.Session()
-        
-        # Your predefined 20 metrics
-        self.metrics = [
-            "probe_success",
-            "container_cpu_usage_seconds_total",
-            "container_memory_usage_bytes",
+
+        self.required_metrics: List[str] = [
+            "cpu_usage_rate",
             "container_start_time_seconds",
-            "node_cpu_seconds_total",
+            "node_cpu_total",
             "node_memory_MemAvailable_bytes",
-            # ... add all 20 metrics here
+            "latency_p95",
+            "latency_std",
+            "error_rate",
+            "memory_usage",
+            "net_throughput",
+            "disk_io_rate"
         ]
 
-    def _fetch_single_metric(self, metric: str, start: int, end: int, step: str) -> pd.DataFrame:
-        """Internal helper to fetch a single metric from the API."""
-        params = {
-            'query': metric,
-            'start': start,
-            'end': end,
-            'step': step
-        }
-
-        
-        
+    def ingest(self, payload: Dict) -> pd.DataFrame:
         try:
-            response = self.session.get(self.query_api, params=params, timeout=30)
+            print("Calling Data Retrieval API...")
+
+            response = self.session.post(self.api_url, json=payload, timeout=30)
             response.raise_for_status()
             data = response.json()
-            
-            results = data.get('data', {}).get('result', [])
-            if not results:
-                print(f"Warning: No data found for {metric}")
-                return pd.DataFrame(columns=['timestamp', metric])
 
-            # Prometheus returns [timestamp, value] pairs
-            # We take the first result series (assuming no high-cardinality labels)
-            #values = results[0]['values']
-            #df = pd.DataFrame(values, columns=['timestamp', metric])
+            metrics_data = data.get("metrics", {})
+            if not metrics_data:
+                raise ValueError("No metrics found in response")
 
             dfs = []
 
-            for series in results:
-                df = pd.DataFrame(series["values"], columns=["timestamp", "value"])
-                df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
-                df["value"] = df["value"].astype(float)
-                
-                dfs.append(df.set_index("timestamp"))
-            
-            # Combine all label variations into ONE column
-            combined_df = pd.concat(dfs, axis=1)
-            
-            # Aggregate across all series (choose mean or sum)
-            combined_df[metric] = combined_df.mean(axis=1)   # or .sum(axis=1)
-            
-            return combined_df[[metric]]
-            
-            # Convert to appropriate types
-           # df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
-            #df[metric] = df[metric].astype(float)
-            
-            #return df.set_index('timestamp')
-            
+            for metric_name, series_list in metrics_data.items():
+
+                # ✅ Filter only required metrics
+                if metric_name not in self.required_metrics:
+                    continue
+
+                if not series_list:
+                    continue
+
+                series_dfs = []
+
+                for series in series_list:
+                    values = series.get("values", [])
+
+                    if not values:
+                        continue
+
+                    df = pd.DataFrame(values, columns=["timestamp", "value"])
+
+                    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
+                    df["value"] = pd.to_numeric(df["value"], errors="coerce")
+
+                    df = df.set_index("timestamp")
+                    series_dfs.append(df)
+
+                if not series_dfs:
+                    continue
+
+                # 🔗 Combine multiple label series into one
+                combined_df = pd.concat(series_dfs, axis=1)
+
+                # 📊 Aggregate (mean across series)
+                combined_df[metric_name] = combined_df.mean(axis=1)
+
+                dfs.append(combined_df[[metric_name]])
+
+            if not dfs:
+                raise ValueError("No required metrics found")
+
+            # 🔗 Merge all metrics
+            final_df = pd.concat(dfs, axis=1).sort_index()
+
+            # ⏱ Resample
+            #final_df = final_df.resample("1min").mean()
+
+            print(f"Ingestion complete ✅ Shape: {final_df.shape}")
+            return final_df
+
         except Exception as e:
-            print(f"Error fetching {metric}: {e}")
+            print(f"Error: {e}")
             return pd.DataFrame()
 
-    def ingest(self, horizon_hours: int, step: str = "1m") -> pd.DataFrame:
-        """
-        Executes parallel ingestion of all 20 metrics.
-        :param horizon_hours: How many hours back to look.
-        :param step: Resolution (e.g., '1m', '15s', '5m').
-        """
-        now = datetime.now()
-        end_time = int(now.timestamp())
-        start_time = int((now - timedelta(hours=horizon_hours)).timestamp())
-
-        print(f"Initiating ingestion from {self.source.upper()}...")
-
-        # Execute fetches in parallel (20 threads for 20 metrics)
-        with ThreadPoolExecutor(max_workers=min(10, len(self.metrics))) as executor:
-            futures = [
-                executor.submit(self._fetch_single_metric, m, start_time, end_time, step) 
-                for m in self.metrics
-            ]
-            
-            results = []
-            for f in futures:
-                r = f.result()
-                if not r.empty:
-                    results.append(r)
-
-        if not results:
-            raise ValueError("No data could be retrieved for any metrics.")
-
-        # Join all metrics on the timestamp index
-        # We use an 'outer' join to preserve all time points; 
-        # the Preprocessing layer will handle the resulting NaNs.
-        final_df = pd.concat(results, axis=1).sort_index()
-        final_df = final_df.resample("1min").mean()
-        
-        print(f"Ingestion complete. Shape: {final_df.shape}")
-        return final_df
-
-# --- Usage Example ---
-# ingestor = DataIngestor(source="prometheus", base_url="http://localhost:9090")
-# raw_data = ingestor.ingest(horizon_hours=6, step="1m")
-
-if __name__ == "__main__":
-    ingestor = DataIngestor(
-        source="prometheus",
-        base_url="http://16.16.70.92:9090"
-    )
-
-    raw_data = ingestor.ingest(horizon_hours=1, step="1m")
-
-    print(raw_data.head(10))
